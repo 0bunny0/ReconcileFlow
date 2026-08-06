@@ -1,99 +1,237 @@
-# POOWARD ReconcileFlow · Streamlit Edition
+from __future__ import annotations
 
-接单与出货双模块、人民币与原币双口径的 Excel 差异核对工具。此目录可直接作为一个 GitHub 仓库部署到 Streamlit Community Cloud。
+import base64
+from binascii import Error as Base64Error
+import hashlib
+import json
+import math
+from pathlib import Path
+import re
+from typing import Any
 
-## 功能
+import streamlit as st
 
-- 接单差异、出货差异分别上传，无需一次提交四份系统表。
-- 文控登记表在两个模块之间共用一次选择。
-- 上传框原生支持点击选择和拖拽上传 `.xlsx` / `.xlsm`。
-- 每次核对同时计算人民币、原币结果，并保存在当前用户会话中。
-- 只展示非零差异，支持“客户代码 → 订单流水号 → 双侧原始行”逐级下钻。
-- 当前口径结果可下载为带核对说明的 Excel 底稿。
-- “系统金额”和“文控金额”作为中央对照轴突出显示。
+from reconciliation import (
+    ReconciliationError,
+    basis_config,
+    export_excel,
+    json_value,
+    module_config,
+    payload,
+    reconcile_module_all,
+)
 
-## 目录
 
-```text
-.
-├── streamlit_app.py          # Streamlit 页面和会话状态
-├── reconciliation.py         # Excel 读取、匹配、汇总和导出逻辑
-├── requirements.txt          # 云端安装依赖
-├── .streamlit/config.toml    # 主题和上传大小配置
-├── assets/index.html         # 原界面 HTML 结构（逐字节保留）
-├── assets/styles.css         # 原界面 CSS（逐字节保留）
-├── assets/component.js       # HTML 界面与 Streamlit 后端通信
-├── tests/test_reconciliation.py
-└── tests/test_visual_contract.py
-```
+APP_NAME = "POOWARD ReconcileFlow"
+ROOT = Path(__file__).resolve().parent
+ASSETS = ROOT / "assets"
+MAX_COMBINED_UPLOAD_BYTES = 150 * 1024 * 1024
 
-`assets/index.html` 和 `assets/styles.css` 是界面的视觉基准文件。自动测试会核对两者哈希，任何字符变化都会导致测试失败。
+st.set_page_config(
+    page_title=APP_NAME,
+    page_icon="🔎",
+    layout="wide",
+    initial_sidebar_state="collapsed",
+)
 
-## 部署到 Streamlit Community Cloud
 
-1. 新建一个 GitHub 仓库，把本目录中的文件和文件夹完整上传到仓库根目录。
-2. 登录 [Streamlit Community Cloud](https://share.streamlit.io/)，选择 **Create app**。
-3. 选择仓库和分支，入口文件填写 `streamlit_app.py`。
-4. 在 **Advanced settings** 中选择 Python `3.12`。
-5. 点击 **Deploy**。首次部署会根据根目录中的 `requirements.txt` 自动安装依赖。
-6. 部署完成后，将生成的网址发给有权限的同事即可；同事不需要安装 Python。
+def _component_markup() -> str:
+    """Use the supplied index.html body without changing its visual structure."""
+    source = (ASSETS / "index.html").read_text(encoding="utf-8")
+    match = re.search(r"<body>(.*)</body>", source, flags=re.IGNORECASE | re.DOTALL)
+    if not match:
+        raise RuntimeError("assets/index.html 缺少 body 结构。")
+    body = match.group(1)
+    return re.sub(
+        r"\s*<script\b[^>]*\bsrc=[\"']/app\.js[\"'][^>]*>\s*</script>\s*",
+        "\n",
+        body,
+        flags=re.IGNORECASE,
+    )
 
-如果表格包含公司敏感数据，请使用私有 GitHub 仓库和受限访问的 Streamlit 工作区，不要把应用设为公开。程序不会主动写入数据库，但上传文件及结果会在当前服务器会话内存中存在；会话结束后缓存失效。
 
-## 本机预览
+# This only removes Streamlit's outer shell. It does not alter the supplied UI.
+STREAMLIT_SHELL_ADAPTER = r"""
+#MainMenu,
+[data-testid="stHeader"],
+[data-testid="stToolbar"],
+[data-testid="stDecoration"],
+[data-testid="stStatusWidget"],
+footer[data-testid="stFooter"] {
+  display: none !important;
+}
 
-建议使用 Python 3.12：
+[data-testid="stAppViewContainer"],
+[data-testid="stMain"],
+.stApp {
+  background: var(--bg) !important;
+}
 
-```bash
-python -m venv .venv
-```
+[data-testid="stAppViewContainer"] {
+  overflow-x: clip;
+}
 
-Windows：
+[data-testid="stMainBlockContainer"] {
+  width: 100% !important;
+  max-width: none !important;
+  padding: 0 !important;
+}
 
-```bat
-.venv\Scripts\activate
-python -m pip install -r requirements.txt
-streamlit run streamlit_app.py
-```
+[data-testid="stMainBlockContainer"] > div,
+[data-testid="stMainBlockContainer"] [data-testid="stVerticalBlock"],
+[data-testid="stMainBlockContainer"] [data-testid="stElementContainer"] {
+  width: 100% !important;
+  max-width: none !important;
+  gap: 0 !important;
+  margin: 0 !important;
+  padding: 0 !important;
+}
+"""
 
-macOS / Linux：
 
-```bash
-source .venv/bin/activate
-python -m pip install -r requirements.txt
-streamlit run streamlit_app.py
-```
+RECONCILE_UI = st.components.v2.component(
+    "pooward_reconcile_flow_exact_ui",
+    html=_component_markup(),
+    css=(ASSETS / "styles.css").read_text(encoding="utf-8") + STREAMLIT_SHELL_ADAPTER,
+    js=(ASSETS / "component.js").read_text(encoding="utf-8"),
+    isolate_styles=False,
+)
 
-浏览器会打开 `http://localhost:8501`。
 
-## 文件要求
+def _decode_file(item: Any, label: str) -> tuple[str, bytes]:
+    if not isinstance(item, dict):
+        raise ReconciliationError(f"请重新选择{label}。")
+    name = str(item.get("name") or label).strip()
+    if Path(name).suffix.lower() not in {".xlsx", ".xlsm"}:
+        raise ReconciliationError(f"{label}必须是 .xlsx 或 .xlsm 文件。")
+    encoded = item.get("data")
+    if not isinstance(encoded, str) or not encoded:
+        raise ReconciliationError(f"没有收到{label}的文件内容。")
+    try:
+        content = base64.b64decode(encoded, validate=True)
+    except (Base64Error, ValueError) as exc:
+        raise ReconciliationError(f"{label}上传内容不完整，请重新选择。") from exc
+    if not content:
+        raise ReconciliationError(f"{label}是空文件。")
+    return name, content
 
-### 接单模块
 
-- 文控登记表：读取名称包含“接单”的工作表。
-- 接单金额明细：需要客户代码、订单流水号、接单金额(RMB)、交易金额。
-- 接单运费明细：需要客户代码、订单流水号、出货运费(RMB)、出货运费(原币)。
+def _json_safe(value: Any) -> Any:
+    if isinstance(value, dict):
+        return {str(key): _json_safe(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_json_safe(item) for item in value]
+    converted = json_value(value)
+    if isinstance(converted, float) and not math.isfinite(converted):
+        return None
+    return converted
 
-### 出货模块
 
-- 文控登记表：读取名称包含“出货”的工作表。
-- 出货金额明细：需要客户代码、订单流水号、出货金额(RMB)、出货金额；也兼容“实际出货金额”字段。
-- 出货运费明细：需要客户代码、订单流水号、出货运费(RMB)、出货运费(原币)。
+def _success_response(request: dict[str, Any]) -> dict[str, Any]:
+    request_id = str(request.get("request_id") or "")
+    module = str(request.get("module") or "")
+    module_info = module_config(module)
+    try:
+        tolerance = float(request.get("tolerance", 1.0))
+    except (TypeError, ValueError) as exc:
+        raise ReconciliationError("差异容差必须是数字。") from exc
+    if tolerance < 0:
+        raise ReconciliationError("差异容差不能小于 0。")
 
-人民币口径使用文控 `VAT PRICE`；原币口径使用文控 `TP-CPO`。差异公式始终为：
+    files = request.get("files")
+    if not isinstance(files, dict):
+        raise ReconciliationError("请完整上传当前模块的三份 Excel 文件。")
+    document_name, document = _decode_file(files.get("document"), "文控登记表")
+    amount_name, amount = _decode_file(files.get("amount"), module_info["amount_source_label"])
+    freight_name, freight = _decode_file(files.get("freight"), module_info["freight_source_label"])
+    if len(document) + len(amount) + len(freight) > MAX_COMBINED_UPLOAD_BYTES:
+        raise ReconciliationError("三份文件合计不能超过 150 MB。")
 
-```text
-差异 = 系统金额 - 文控金额
-```
+    source_names = {
+        "document": document_name,
+        "amount": amount_name,
+        "freight": freight_name,
+    }
+    results = reconcile_module_all(
+        document,
+        amount,
+        freight,
+        module=module,
+        tolerance=tolerance,
+        source_names=source_names,
+    )
+    module_payload: dict[str, Any] = {}
+    for basis, result in results.items():
+        result_payload = payload(result)
+        result_payload["download_name"] = (
+            f"{module_info['label']}_{basis_config(result.basis)['label']}_核对结果.xlsx"
+        )
+        result_payload["download_base64"] = base64.b64encode(export_excel(result)).decode("ascii")
+        module_payload[basis] = _json_safe(result_payload)
+    return {
+        "status": "ok",
+        "request_id": request_id,
+        "module": module,
+        "document_digest": hashlib.sha256(document).hexdigest(),
+        "modules": {module: module_payload},
+    }
 
-## 会话与多人访问
 
-- 每位访问者拥有独立的 Streamlit Session State，不会看到其他用户当前页面的缓存结果。
-- 刷新、网络中断、应用重启或会话超时可能清除结果，请在核对后及时下载 Excel。
-- 当前版本没有账号、数据库、历史记录和审批流；如需正式公司级部署，建议增加 SSO、审计日志和受控对象存储。
+def _process_request(request: Any) -> dict[str, Any]:
+    request_id = ""
+    if isinstance(request, dict):
+        request_id = str(request.get("request_id") or "")
+    try:
+        if not isinstance(request, dict) or not request_id:
+            raise ReconciliationError("上传请求无效，请重新点击开始核对。")
+        return _success_response(request)
+    except ReconciliationError as exc:
+        return {"status": "error", "request_id": request_id, "error": str(exc)}
+    except Exception:
+        return {
+            "status": "error",
+            "request_id": request_id,
+            "error": "处理失败。请确认当前模块的三份 Excel 格式和表头未改变，然后重试。",
+        }
 
-## 测试
 
-```bash
-python -m unittest discover -s tests -v
-```
+def main() -> None:
+    if "component_response" not in st.session_state:
+        st.session_state.component_response = None
+    if "processed_request_id" not in st.session_state:
+        st.session_state.processed_request_id = None
+    if "document_digest" not in st.session_state:
+        st.session_state.document_digest = None
+    if "module_payload_cache" not in st.session_state:
+        st.session_state.module_payload_cache = {}
+
+    result = RECONCILE_UI(
+        data={"response": st.session_state.component_response},
+        key="pooward_reconcile_flow",
+        width="stretch",
+        height="content",
+        on_analyze_change=lambda: None,
+    )
+    request = getattr(result, "analyze", None)
+    request_id = str(request.get("request_id") or "") if isinstance(request, dict) else ""
+    if request_id and request_id != st.session_state.processed_request_id:
+        st.session_state.processed_request_id = request_id
+        response = _process_request(request)
+        if response.get("status") == "ok":
+            document_digest = response.get("document_digest")
+            if (
+                st.session_state.document_digest
+                and st.session_state.document_digest != document_digest
+            ):
+                st.session_state.module_payload_cache = {}
+            st.session_state.document_digest = document_digest
+            cache = dict(st.session_state.module_payload_cache)
+            cache.update(response.get("modules") or {})
+            st.session_state.module_payload_cache = cache
+            response["modules"] = cache
+        st.session_state.component_response = response
+        st.rerun()
+
+
+if __name__ == "__main__":
+    main()
