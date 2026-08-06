@@ -1,7 +1,0 @@
-7a91720bc756843502c3b7504c77b8fe44217c85c537d85037f0f536151b2caa  et_xmlfile-2.0.0-py3-none-any.whl
-24d0eb82c0541d3415a33425db64ae439dffccd7b4dbcb30e7c35120205c506a  numpy-2.5.1-cp314-cp314-win_amd64.whl
-5282c12b107bffeef825f4617dc029afaf41d0ea60823bbb665ef3079dc79de2  openpyxl-3.1.5-py2.py3-none-any.whl
-cd8f7c6dc98527058ee6264219343f5392240a6f1bfa654fc5d79023020d0c92  pandas-3.0.5-cp314-cp314-win_amd64.whl
-a8b2bc7bffae282281c8140a97d3aa9c14da0b136dfe83f850eea9a5f7470427  python_dateutil-2.9.0.post0-py2.py3-none-any.whl
-4721f391ed90541fddacab5acf947aa0d3dc7d27b2e1e8eda2be8970586c3274  six-1.17.0-py2.py3-none-any.whl
-dc096730c87af6cab1b171c9d532be840741ff5d459015e7f6947bd7d7e54931  tzdata-2026.3-py2.py3-none-any.whl
