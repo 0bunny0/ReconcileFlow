@@ -1,736 +1,99 @@
-from __future__ import annotations
+# POOWARD ReconcileFlow · Streamlit Edition
 
-from datetime import date, datetime
-import hashlib
-import html
-from pathlib import Path
-from typing import Any
+接单与出货双模块、人民币与原币双口径的 Excel 差异核对工具。此目录可直接作为一个 GitHub 仓库部署到 Streamlit Community Cloud。
 
-import pandas as pd
-import streamlit as st
+## 功能
 
-from reconciliation import (
-    ReconciliationError,
-    Result,
-    basis_config,
-    export_excel,
-    module_config,
-    reconcile_module_all,
-)
+- 接单差异、出货差异分别上传，无需一次提交四份系统表。
+- 文控登记表在两个模块之间共用一次选择。
+- 上传框原生支持点击选择和拖拽上传 `.xlsx` / `.xlsm`。
+- 每次核对同时计算人民币、原币结果，并保存在当前用户会话中。
+- 只展示非零差异，支持“客户代码 → 订单流水号 → 双侧原始行”逐级下钻。
+- 当前口径结果可下载为带核对说明的 Excel 底稿。
+- “系统金额”和“文控金额”作为中央对照轴突出显示。
 
+## 目录
 
-APP_NAME = "POOWARD ReconcileFlow"
-MAX_COMBINED_UPLOAD_BYTES = 150 * 1024 * 1024
-MODULES = {"接单差异": "order", "出货差异": "shipment"}
-BASES = {"人民币 RMB": "rmb", "原币": "original"}
+```text
+.
+├── streamlit_app.py          # Streamlit 页面和会话状态
+├── reconciliation.py         # Excel 读取、匹配、汇总和导出逻辑
+├── requirements.txt          # 云端安装依赖
+├── .streamlit/config.toml    # 主题和上传大小配置
+├── assets/index.html         # 原界面 HTML 结构（逐字节保留）
+├── assets/styles.css         # 原界面 CSS（逐字节保留）
+├── assets/component.js       # HTML 界面与 Streamlit 后端通信
+├── tests/test_reconciliation.py
+└── tests/test_visual_contract.py
+```
 
-DOCUMENT_PREFERRED = [
-    "DAY", "BIL", "CO", "CPO NO", "JO", "PART-DWG", "QTY", "CURR",
-    "UP-CPO", "TP-CPO", "EX-CH", "VAT  PRICE", "VAT PRICE", "INVOICE",
-    "匹配方式", "关联流水号", "来源表", "来源行号",
-]
-ORDER_PREFERRED = [
-    "数据来源", "接单时间", "客户代码", "订单流水号", "客户PO", "零件名称",
-    "订单数量", "单价", "交易金额", "交易币种", "接单汇率", "接单金额(RMB)",
-    "出货运费(原币)", "出货运费(RMB)", "出货装箱单号", "实际出厂日期",
-    "出货通知单号", "来源表", "来源行号",
-]
-SHIPMENT_PREFERRED = [
-    "数据来源", "出货日期", "实际出货日期", "实际出厂日期", "客户代码",
-    "订单流水号", "客户PO", "零件名称", "出货数量", "订单数量", "出货金额",
-    "实际出货金额", "交易币种", "出货金额(RMB)", "实际出货金额(RMB)",
-    "出货运费(原币)", "出货运费(RMB)", "出货装箱单号", "出货通知单号",
-    "来源表", "来源行号",
-]
-INTERNAL_COLUMNS = {"客户代码_标准", "订单流水号_标准", "匹配键"}
+`assets/index.html` 和 `assets/styles.css` 是界面的视觉基准文件。自动测试会核对两者哈希，任何字符变化都会导致测试失败。
 
+## 部署到 Streamlit Community Cloud
 
-def load_css() -> None:
-    css_path = Path(__file__).with_name("assets") / "styles.css"
-    st.markdown(f"<style>{css_path.read_text(encoding='utf-8')}</style>", unsafe_allow_html=True)
+1. 新建一个 GitHub 仓库，把本目录中的文件和文件夹完整上传到仓库根目录。
+2. 登录 [Streamlit Community Cloud](https://share.streamlit.io/)，选择 **Create app**。
+3. 选择仓库和分支，入口文件填写 `streamlit_app.py`。
+4. 在 **Advanced settings** 中选择 Python `3.12`。
+5. 点击 **Deploy**。首次部署会根据根目录中的 `requirements.txt` 自动安装依赖。
+6. 部署完成后，将生成的网址发给有权限的同事即可；同事不需要安装 Python。
 
+如果表格包含公司敏感数据，请使用私有 GitHub 仓库和受限访问的 Streamlit 工作区，不要把应用设为公开。程序不会主动写入数据库，但上传文件及结果会在当前服务器会话内存中存在；会话结束后缓存失效。
 
-def init_state() -> None:
-    defaults: dict[str, Any] = {
-        "result_cache": {},
-        "export_cache": {},
-        "module_revision": {"order": 0, "shipment": 0},
-        "document_digest": None,
-        "last_success": None,
-    }
-    for key, value in defaults.items():
-        if key not in st.session_state:
-            st.session_state[key] = value
+## 本机预览
 
+建议使用 Python 3.12：
 
-def file_bytes(uploaded: Any) -> bytes:
-    return uploaded.getvalue()
+```bash
+python -m venv .venv
+```
 
+Windows：
 
-def digest(data: bytes) -> str:
-    return hashlib.sha256(data).hexdigest()
+```bat
+.venv\Scripts\activate
+python -m pip install -r requirements.txt
+streamlit run streamlit_app.py
+```
 
+macOS / Linux：
 
-def format_amount(value: Any, basis: str) -> str:
-    try:
-        places = 2 if basis == "rmb" else 4
-        return f"{float(value):,.{places}f}"
-    except (TypeError, ValueError):
-        return "—"
+```bash
+source .venv/bin/activate
+python -m pip install -r requirements.txt
+streamlit run streamlit_app.py
+```
 
+浏览器会打开 `http://localhost:8501`。
 
-def format_cell(value: Any) -> str:
-    if value is None:
-        return "—"
-    try:
-        if bool(pd.isna(value)):
-            return "—"
-    except (TypeError, ValueError):
-        pass
-    if isinstance(value, (pd.Timestamp, datetime)):
-        timestamp = pd.Timestamp(value)
-        if timestamp.hour == timestamp.minute == timestamp.second == timestamp.microsecond == 0:
-            return timestamp.strftime("%Y-%m-%d")
-        return timestamp.strftime("%Y-%m-%d %H:%M:%S")
-    if isinstance(value, date):
-        return value.isoformat()
-    if isinstance(value, float):
-        return f"{value:,.4f}".rstrip("0").rstrip(".")
-    text = str(value).strip()
-    return text or "—"
+## 文件要求
 
+### 接单模块
 
-def render_topbar(module: str, basis: str) -> None:
-    module_info = module_config(module)
-    config = basis_config(basis)
-    st.markdown(
-        f"""
-        <header class="rf-topbar">
-          <div class="rf-brand">
-            <span class="rf-brand-mark" aria-hidden="true">P</span>
-            <span><strong>POOWARD</strong><small>市场部数据核对中心</small></span>
-          </div>
-          <div class="rf-topbar-status">
-            <span class="rf-module-badge">{html.escape(module_info['label'])}</span>
-            <span class="rf-basis-badge">{html.escape(config['label'])} · {html.escape(config['short_label'])}</span>
-          </div>
-        </header>
-        """,
-        unsafe_allow_html=True,
-    )
+- 文控登记表：读取名称包含“接单”的工作表。
+- 接单金额明细：需要客户代码、订单流水号、接单金额(RMB)、交易金额。
+- 接单运费明细：需要客户代码、订单流水号、出货运费(RMB)、出货运费(原币)。
 
+### 出货模块
 
-def render_header(module: str, basis: str) -> None:
-    module_info = module_config(module)
-    config = basis_config(basis)
-    if module == "order":
-        english = "ORDER RECONCILIATION"
-    else:
-        english = "SHIPMENT RECONCILIATION"
-    rule = (
-        f"系统金额 = {module_info['amount_labels'][basis]} + {config['freight_label']}；"
-        f"文控金额 = “{module_info['document_keyword']}”子表的 "
-        f"{'VAT PRICE' if basis == 'rmb' else 'TP-CPO'}。"
-    )
-    st.markdown(
-        f"""
-        <header class="rf-hero">
-          <div>
-            <p class="rf-eyebrow">{english}</p>
-            <h1>{html.escape(module_info['label'])}</h1>
-            <p class="rf-lede">{html.escape(rule)}</p>
-          </div>
-          <div class="rf-formula" aria-label="差异计算公式">
-            <span>系统金额</span>
-            <b>−</b>
-            <span>文控金额</span>
-            <b>=</b>
-            <em>差异</em>
-          </div>
-        </header>
-        """,
-        unsafe_allow_html=True,
-    )
+- 文控登记表：读取名称包含“出货”的工作表。
+- 出货金额明细：需要客户代码、订单流水号、出货金额(RMB)、出货金额；也兼容“实际出货金额”字段。
+- 出货运费明细：需要客户代码、订单流水号、出货运费(RMB)、出货运费(原币)。
 
+人民币口径使用文控 `VAT PRICE`；原币口径使用文控 `TP-CPO`。差异公式始终为：
 
-def render_upload_form(module: str) -> tuple[Any, Any, Any, float, bool]:
-    module_info = module_config(module)
-    with st.form(f"upload_form_{module}", clear_on_submit=False, border=True):
-        st.markdown(
-            f"""
-            <div class="rf-section-heading upload-heading">
-              <span class="rf-step">01</span>
-              <div><h2>上传{module_info['short_label']}核对三份文件</h2></div>
-              <p>支持点击选择或拖拽上传 .xlsx / .xlsm；文件仅在当前会话内存中处理</p>
-            </div>
-            """,
-            unsafe_allow_html=True,
-        )
+```text
+差异 = 系统金额 - 文控金额
+```
 
-        shared_intro, document_col = st.columns([0.72, 1.28], gap="large", vertical_alignment="center")
-        with shared_intro:
-            st.markdown(
-                """
-                <div class="rf-group-heading">
-                  <span class="rf-group-kicker">SHARED SOURCE</span>
-                  <div><h3>共用文控数据</h3><p>切换接单或出货模块时，已选择的文控文件会继续保留。</p></div>
-                </div>
-                """,
-                unsafe_allow_html=True,
-            )
-        with document_col:
-            document = st.file_uploader(
-                "文控登记表 · Document Control Ledger",
-                type=["xlsx", "xlsm"],
-                key="shared_document",
-                help="接单和出货模块共用；切换模块后无需重新选择。",
-            )
-            st.caption(f"读取名称包含“{module_info['document_keyword']}”的子表")
+## 会话与多人访问
 
-        st.markdown('<div class="rf-source-divider"></div>', unsafe_allow_html=True)
-        module_kicker = "ORDER" if module == "order" else "SHIPMENT"
-        st.markdown(
-            f"""
-            <div class="rf-group-heading module-heading">
-              <span class="rf-group-kicker">{module_kicker}</span>
-              <div><h3>{module_info['short_label']}核对数据</h3>
-              <p>用于核对文控表中名称含“{module_info['document_keyword']}”的子表。</p></div>
-            </div>
-            """,
-            unsafe_allow_html=True,
-        )
-        amount_col, freight_col = st.columns(2, gap="medium")
-        with amount_col:
-            amount = st.file_uploader(
-                f"{module_info['amount_source_label']} · Amount Detail",
-                type=["xlsx", "xlsm"],
-                key=f"{module}_amount_file",
-            )
-            st.caption(f"人民币：{module_info['amount_labels']['rmb']} ｜ 原币：{module_info['amount_labels']['original']}")
-        with freight_col:
-            freight = st.file_uploader(
-                f"{module_info['freight_source_label']} · Freight Detail",
-                type=["xlsx", "xlsm"],
-                key=f"{module}_freight_file",
-            )
-            st.caption("读取出货运费(RMB)及出货运费(原币)")
+- 每位访问者拥有独立的 Streamlit Session State，不会看到其他用户当前页面的缓存结果。
+- 刷新、网络中断、应用重启或会话超时可能清除结果，请在核对后及时下载 Excel。
+- 当前版本没有账号、数据库、历史记录和审批流；如需正式公司级部署，建议增加 SSO、审计日志和受控对象存储。
 
-        st.markdown('<div class="rf-source-divider action-divider"></div>', unsafe_allow_html=True)
-        cache_note, tolerance_col, action = st.columns([1.15, 0.62, 1], gap="medium", vertical_alignment="bottom")
-        with cache_note:
-            st.markdown(
-                """
-                <div class="rf-cache-note"><strong>人民币与原币同步计算</strong>
-                <span>提交后切换口径无需重新读取文件</span></div>
-                """,
-                unsafe_allow_html=True,
-            )
-        with tolerance_col:
-            tolerance = st.number_input(
-                "差异容差",
-                min_value=0.0,
-                value=1.0,
-                step=0.01,
-                format="%.2f",
-                help="绝对差异不超过该数值时视为一致。",
-            )
-        with action:
-            submitted = st.form_submit_button(
-                f"开始{module_info['short_label']}核对",
-                type="primary",
-                use_container_width=True,
-            )
-    return document, amount, freight, float(tolerance), submitted
+## 测试
 
-
-def run_reconciliation(module: str, document: Any, amount: Any, freight: Any, tolerance: float) -> None:
-    if not all((document, amount, freight)):
-        st.error("请上传文控登记表、金额明细和运费明细三份文件。", icon="⚠️")
-        return
-
-    blobs = {
-        "document": file_bytes(document),
-        "amount": file_bytes(amount),
-        "freight": file_bytes(freight),
-    }
-    total_size = sum(len(value) for value in blobs.values())
-    if total_size > MAX_COMBINED_UPLOAD_BYTES:
-        st.error("三份文件合计不能超过 150 MB。请精简无关工作表后再试。", icon="⚠️")
-        return
-
-    module_info = module_config(module)
-    names = {
-        "document": document.name,
-        "amount": amount.name,
-        "freight": freight.name,
-    }
-    document_digest = digest(blobs["document"])
-
-    try:
-        with st.status(
-            f"正在读取三份文件并生成{module_info['short_label']}双口径结果…",
-            expanded=True,
-        ) as status:
-            st.write("正在识别工作表和字段…")
-            results = reconcile_module_all(
-                blobs["document"],
-                blobs["amount"],
-                blobs["freight"],
-                module=module,
-                tolerance=tolerance,
-                source_names=names,
-            )
-            st.write("人民币与原币结果已计算完成，正在写入当前会话缓存…")
-
-            previous_digest = st.session_state.document_digest
-            cache = dict(st.session_state.result_cache)
-            if previous_digest and previous_digest != document_digest:
-                cache = {}
-                st.session_state.export_cache = {}
-            cache[module] = results
-            st.session_state.result_cache = cache
-            st.session_state.document_digest = document_digest
-
-            revisions = dict(st.session_state.module_revision)
-            revisions[module] = int(revisions.get(module, 0)) + 1
-            st.session_state.module_revision = revisions
-            st.session_state.export_cache = {
-                key: value
-                for key, value in st.session_state.export_cache.items()
-                if not str(key).startswith(f"{module}:")
-            }
-            st.session_state.last_success = module
-            status.update(label="核对完成：两个口径均已缓存", state="complete", expanded=False)
-        st.toast(f"{module_info['label']}已完成", icon="✅")
-    except ReconciliationError as exc:
-        st.error(str(exc), icon="⚠️")
-    except Exception:
-        st.error("处理文件时发生异常。请确认三份文件均为有效 Excel，并检查表头后重试。", icon="⚠️")
-        st.caption("如需排查，请将此页面截图和三份文件的表头发给维护人员。")
-
-
-def selected_rows(event: Any) -> list[int]:
-    try:
-        return list(event.selection.rows)
-    except (AttributeError, TypeError):
-        try:
-            return list(event.get("selection", {}).get("rows", []))
-        except (AttributeError, TypeError):
-            return []
-
-
-def comparison_frame(frame: pd.DataFrame, result: Result, *, line_level: bool) -> pd.DataFrame:
-    config = basis_config(result.basis)
-    module_info = module_config(result.module)
-    rename = {
-        "主金额": module_info["amount_labels"][result.basis],
-        "运费": config["freight_label"],
-        "系统金额": config["system_label"],
-        "文控金额": config["document_label"],
-        "差异": config["difference_label"],
-    }
-    if line_level:
-        columns = [
-            "订单流水号", "主金额", "运费", "系统金额", "文控金额", "差异",
-            "状态",
-        ]
-    else:
-        columns = [
-            "客户代码", "主金额", "运费", "系统金额", "文控金额", "差异",
-            "状态",
-        ]
-    return frame.reindex(columns=columns).rename(columns=rename).reset_index(drop=True)
-
-
-def comparison_styler(frame: pd.DataFrame, result: Result) -> pd.io.formats.style.Styler:
-    config = basis_config(result.basis)
-    module_info = module_config(result.module)
-    system_label = config["system_label"]
-    document_label = config["document_label"]
-    difference_label = config["difference_label"]
-    numeric_columns = [
-        module_info["amount_labels"][result.basis],
-        config["freight_label"],
-        system_label,
-        document_label,
-        difference_label,
-    ]
-    number_pattern = "{:,.2f}" if result.basis == "rmb" else "{:,.4f}"
-    formats = {column: number_pattern for column in numeric_columns if column in frame.columns}
-    styler = frame.style.format(formats, na_rep="—")
-    identity_label = str(frame.columns[0])
-    styler = styler.set_properties(
-        subset=[identity_label],
-        **{
-            "background-color": "#e9f2f1",
-            "color": "#0d5d58",
-            "font-weight": "900",
-            "text-align": "left",
-        },
-    )
-    styler = styler.set_properties(
-        subset=[system_label],
-        **{
-            "background-color": "#edf6f4",
-            "color": "#174b46",
-            "font-weight": "900",
-            "font-size": "15px",
-            "text-align": "right",
-            "border-right": "1px solid #d4dddc",
-        },
-    )
-    styler = styler.set_properties(
-        subset=[document_label],
-        **{
-            "background-color": "#fbf5ea",
-            "color": "#65491f",
-            "font-weight": "900",
-            "font-size": "15px",
-            "text-align": "left",
-        },
-    )
-    if difference_label in frame.columns:
-        styler = styler.map(
-            lambda value: (
-                "color: #a54545; font-weight: 800;" if float(value) < 0
-                else "color: #8b5b19; font-weight: 800;" if float(value) > 0
-                else "color: #536467;"
-            ),
-            subset=[difference_label],
-        )
-    if "状态" in frame.columns:
-        status_styles = {
-            "有差异": "background-color: #ffefd0; color: #805007; font-weight: 900;",
-            "仅文控表": "background-color: #fbe2e2; color: #913a3a; font-weight: 900;",
-            "仅系统表": "background-color: #e5e9f7; color: #45548b; font-weight: 900;",
-        }
-        styler = styler.map(lambda value: status_styles.get(str(value), ""), subset=["状态"])
-
-    system_index = frame.columns.get_loc(system_label)
-    document_index = frame.columns.get_loc(document_label)
-    styler = styler.set_table_styles(
-        [
-            {
-                "selector": f"th.col_heading.level0.col{system_index}",
-                "props": [
-                    ("background-color", "#dcece9"), ("color", "#0d5d58"),
-                    ("font-weight", "900"), ("text-align", "right"),
-                    ("border-right", "1px solid #d4dddc"),
-                ],
-            },
-            {
-                "selector": f"th.col_heading.level0.col{document_index}",
-                "props": [
-                    ("background-color", "#f0e4cf"), ("color", "#6d4b1e"),
-                    ("font-weight", "900"), ("text-align", "left"),
-                ],
-            },
-        ],
-        overwrite=False,
-    )
-    return styler
-
-
-def comparison_column_config(result: Result, identity: str) -> dict[str, Any]:
-    config = basis_config(result.basis)
-    module_info = module_config(result.module)
-    number_format = "%,.2f" if result.basis == "rmb" else "%,.4f"
-    return {
-        identity: st.column_config.TextColumn(identity, width="large", pinned=True),
-        module_info["amount_labels"][result.basis]: st.column_config.NumberColumn(
-            module_info["amount_labels"][result.basis], width=155, alignment="right", format=number_format,
-        ),
-        config["freight_label"]: st.column_config.NumberColumn(
-            config["freight_label"], width=155, alignment="right", format=number_format,
-        ),
-        config["system_label"]: st.column_config.NumberColumn(
-            config["system_label"], width=180, alignment="right", format=number_format,
-        ),
-        config["document_label"]: st.column_config.NumberColumn(
-            config["document_label"], width=180, alignment="left", format=number_format,
-        ),
-        config["difference_label"]: st.column_config.NumberColumn(
-            config["difference_label"], width=160, alignment="right", format=number_format,
-        ),
-        "状态": st.column_config.TextColumn("状态", width=110, alignment="left"),
-    }
-
-
-def render_kpis(result: Result) -> None:
-    stats = result.statistics
-    config = basis_config(result.basis)
-    system_total = format_amount(stats.get("系统总额"), result.basis)
-    document_total = format_amount(stats.get("文控总额"), result.basis)
-    total_difference = format_amount(stats.get("总差异"), result.basis)
-    st.markdown(
-        f"""
-        <section class="rf-kpi-grid" aria-label="核对关键指标">
-          <article class="rf-kpi system-total"><span>{html.escape(config['system_label'])}</span><strong>{system_total}</strong></article>
-          <article class="rf-kpi document-total"><span>{html.escape(config['document_label'])}</span><strong>{document_total}</strong></article>
-          <article class="rf-kpi accent"><span>{html.escape(config['difference_label'])}（系统 − 文控）</span><strong>{total_difference}</strong></article>
-          <article class="rf-kpi"><span>差异客户 / 流水号</span><strong>{int(stats.get('差异客户数', 0))} / {int(stats.get('差异流水号数', 0))}</strong></article>
-        </section>
-        """,
-        unsafe_allow_html=True,
-    )
-
-
-def render_record(frame: pd.DataFrame, *, preferred: list[str], empty_message: str) -> None:
-    if frame.empty:
-        st.info(empty_message)
-        return
-    for ordinal, (_, row) in enumerate(frame.iterrows(), start=1):
-        source = format_cell(row.get("来源表"))
-        row_number = format_cell(row.get("来源行号"))
-        label = f"第 {ordinal} 条 · {source} · Excel 第 {row_number} 行"
-        with st.expander(label, expanded=len(frame) == 1):
-            available = [column for column in preferred if column in row.index and column not in INTERNAL_COLUMNS]
-            remaining = [
-                str(column) for column in row.index
-                if str(column) not in available and str(column) not in INTERNAL_COLUMNS
-            ]
-            ordered = available + remaining
-            cells = []
-            for column in ordered:
-                value = format_cell(row[column])
-                cells.append(
-                    '<div class="rf-record-item">'
-                    f'<dt>{html.escape(str(column))}</dt><dd>{html.escape(value)}</dd>'
-                    "</div>"
-                )
-            st.markdown(f'<dl class="rf-record-grid">{"".join(cells)}</dl>', unsafe_allow_html=True)
-
-
-def render_results(result: Result) -> None:
-    module_info = module_config(result.module)
-    config = basis_config(result.basis)
-    revision = int(st.session_state.module_revision.get(result.module, 0))
-
-    export_key = f"{result.module}:{result.basis}:{revision}"
-    if export_key not in st.session_state.export_cache:
-        st.session_state.export_cache[export_key] = export_excel(result)
-    filename = f"{module_info['short_label']}_{config['short_label']}_差异核对结果.xlsx"
-    title_col, download_col = st.columns([1, 0.42], gap="medium", vertical_alignment="bottom")
-    with title_col:
-        st.markdown(
-            f"""
-            <div class="rf-results-head">
-              <div><p class="rf-eyebrow">{module_info['short_label'].upper()} · {config['short_label']}</p>
-              <h2>{html.escape(module_info['label'])}结果</h2></div>
-            </div>
-            """,
-            unsafe_allow_html=True,
-        )
-    with download_col:
-        st.download_button(
-            "下载当前口径 Excel 结果",
-            data=st.session_state.export_cache[export_key],
-            file_name=filename,
-            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            type="secondary",
-            use_container_width=True,
-        )
-    st.markdown(
-        '<div class="rf-cache-status"><i></i><span>当前模块的人民币与原币结果均已缓存，可直接切换口径。</span></div>',
-        unsafe_allow_html=True,
-    )
-
-    render_kpis(result)
-
-    if result.warnings:
-        with st.expander(f"核对提示 · {len(result.warnings)} 条", expanded=False, icon="⚠️"):
-            for warning in result.warnings:
-                st.markdown(f"- {html.escape(str(warning))}")
-
-    with st.container(border=True):
-        heading_col, search_col = st.columns([1, 0.34], gap="medium", vertical_alignment="bottom")
-        with heading_col:
-            st.markdown(
-                """
-                <div class="rf-section-heading result-section">
-                  <span class="rf-step">02</span>
-                  <div><h2>客户差异汇总</h2><p>点击客户代码，查看该客户有差异的订单流水号。</p></div>
-                </div>
-                """,
-                unsafe_allow_html=True,
-            )
-        with search_col:
-            search = st.text_input(
-                "搜索客户代码",
-                placeholder="如 CB229",
-                key=f"customer_search_{result.module}_{result.basis}_{revision}",
-            ).strip().upper()
-        customer_source = result.customer_differences.reset_index(drop=True)
-        if search:
-            customer_source = customer_source[
-                customer_source["客户代码"].astype(str).str.upper().str.contains(search, regex=False)
-            ].reset_index(drop=True)
-        if customer_source.empty:
-            if search:
-                st.info("没有找到匹配的差异客户代码。")
-            else:
-                st.success("当前口径没有非零客户差异。", icon="✅")
-            return
-
-        customer_display = comparison_frame(customer_source, result, line_level=False)
-        customer_event = st.dataframe(
-            comparison_styler(customer_display, result),
-            key=f"customers_{result.module}_{result.basis}_{revision}",
-            hide_index=True,
-            width="stretch",
-            height=min(680, 42 * (len(customer_display) + 1) + 8),
-            on_select="rerun",
-            selection_mode="single-row",
-            column_config=comparison_column_config(result, "客户代码"),
-        )
-    customer_rows = selected_rows(customer_event)
-    if not customer_rows:
-        st.caption("选择一位客户后，这里将出现该客户的差异流水号。")
-        return
-
-    customer_position = customer_rows[0]
-    if customer_position >= len(customer_source):
-        return
-    customer = str(customer_source.iloc[customer_position]["客户代码"])
-    line_source = result.line_differences[
-        result.line_differences["客户代码"].astype(str).eq(customer)
-    ].reset_index(drop=True)
-
-    with st.container(border=True):
-        st.markdown(
-            f"""
-            <div class="rf-section-heading result-section">
-              <span class="rf-step">03</span>
-              <div><h2>{html.escape(customer)} 的差异流水号</h2>
-              <p>共 {len(line_source)} 条差异；点击订单流水号查看两侧原始数据。</p></div>
-            </div>
-            """,
-            unsafe_allow_html=True,
-        )
-        if line_source.empty:
-            st.info("该客户没有非零流水号差异。")
-            return
-
-        line_display = comparison_frame(line_source, result, line_level=True)
-        customer_key = hashlib.sha1(customer.encode("utf-8")).hexdigest()[:10]
-        line_event = st.dataframe(
-            comparison_styler(line_display, result),
-            key=f"lines_{result.module}_{result.basis}_{revision}_{customer_key}",
-            hide_index=True,
-            width="stretch",
-            height=min(620, 42 * (len(line_display) + 1) + 8),
-            on_select="rerun",
-            selection_mode="single-row",
-            column_config=comparison_column_config(result, "订单流水号"),
-        )
-    line_rows = selected_rows(line_event)
-    if not line_rows:
-        st.caption("选择一条流水号后，下方将并排展示文控与系统原始行。")
-        return
-
-    line_position = line_rows[0]
-    if line_position >= len(line_source):
-        return
-    line = line_source.iloc[line_position]
-    match_key = str(line["匹配键"])
-    order_number = str(line["订单流水号"])
-    document_rows = result.document_rows[
-        result.document_rows["客户代码_标准"].astype(str).eq(customer)
-        & result.document_rows["匹配键"].astype(str).eq(match_key)
-    ]
-    system_rows = result.system_rows[
-        result.system_rows["客户代码_标准"].astype(str).eq(customer)
-        & result.system_rows["匹配键"].astype(str).eq(match_key)
-    ]
-
-    with st.container(border=True):
-        st.markdown(
-            f"""
-            <div class="rf-section-heading result-section">
-              <span class="rf-step">04</span>
-              <div><h2>流水号 {html.escape(order_number)} · 原始数据</h2>
-              <p>文控与系统数据并排展示，来源表及 Excel 行号均保留。</p></div>
-            </div>
-            """,
-            unsafe_allow_html=True,
-        )
-        document_col, system_col = st.columns(2, gap="medium")
-        with document_col:
-            st.markdown(
-                f'<div class="rf-raw-head document"><i></i><span>文控登记表</span><strong>{len(document_rows)} 行</strong></div>',
-                unsafe_allow_html=True,
-            )
-            render_record(document_rows, preferred=DOCUMENT_PREFERRED, empty_message="文控侧没有对应原始行。")
-        with system_col:
-            st.markdown(
-                f'<div class="rf-raw-head system"><i></i><span>系统{module_info["short_label"]}数据</span><strong>{len(system_rows)} 行</strong></div>',
-                unsafe_allow_html=True,
-            )
-            preferred = ORDER_PREFERRED if result.module == "order" else SHIPMENT_PREFERRED
-            render_record(system_rows, preferred=preferred, empty_message="系统侧没有对应原始行。")
-
-
-def main() -> None:
-    st.set_page_config(
-        page_title=APP_NAME,
-        page_icon="🔎",
-        layout="wide",
-        initial_sidebar_state="expanded",
-    )
-    load_css()
-    init_state()
-
-    st.sidebar.markdown('<p class="rf-sidebar-title">核对模块</p>', unsafe_allow_html=True)
-    module_label = st.sidebar.radio(
-        "核对模块",
-        options=list(MODULES),
-        index=0,
-        key="active_module_label",
-        label_visibility="collapsed",
-    )
-    module = MODULES[module_label]
-    basis_label = st.sidebar.radio(
-        "显示口径",
-        options=list(BASES),
-        index=0,
-        key="active_basis_label",
-    )
-    basis = BASES[basis_label]
-    st.sidebar.markdown(
-        """
-        <div class="rf-sidebar-note">
-          <strong>一次提交，双口径缓存</strong>
-          <span>人民币与原币会同时计算。切换模块时，已选择的文控表继续保留。</span>
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
-    st.sidebar.caption("文件仅在当前浏览器会话中处理；关闭会话后缓存会失效。")
-
-    render_topbar(module, basis)
-    render_header(module, basis)
-    document, amount, freight, tolerance, submitted = render_upload_form(module)
-    if submitted:
-        run_reconciliation(module, document, amount, freight, tolerance)
-
-    module_results = st.session_state.result_cache.get(module)
-    if module_results and basis in module_results:
-        st.divider()
-        render_results(module_results[basis])
-    else:
-        st.markdown(
-            """
-            <div class="rf-empty-state">
-              <span>等待核对</span>
-              <strong>上传当前模块的三份文件</strong>
-              <p>完成后可直接切换人民币与原币口径，并逐级查看客户、流水号及原始行。</p>
-            </div>
-            """,
-            unsafe_allow_html=True,
-        )
-
-    st.markdown('<footer class="rf-footer">POOWARD · ReconcileFlow · Streamlit Edition</footer>', unsafe_allow_html=True)
-
-
-if __name__ == "__main__":
-    main()
+```bash
+python -m unittest discover -s tests -v
+```
