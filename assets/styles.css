@@ -19,9 +19,9 @@
   --blue: #475d95;
   --system-bg: #eef8f6;
   --system-bg-strong: #d9eeea;
-  --document-bg: #fff8ec;
-  --document-bg-strong: #f5e8d0;
-  --comparison-axis: #398b83;
+  --document-bg: #f3f6f8;
+  --document-bg-strong: #e4ebf0;
+  --comparison-axis: #b8cdca;
   --shadow-sm: 0 4px 14px rgba(17, 55, 51, .05);
   --shadow-md: 0 16px 40px rgba(17, 55, 51, .075);
   --radius-sm: 8px;
@@ -572,9 +572,9 @@ h1 {
 .kpi span { color: var(--muted-strong); font-size: 12px; font-weight: 800; }
 .kpi strong { display: block; margin-top: 7px; overflow: hidden; font-size: clamp(20px, 2.1vw, 26px); font-weight: 900; letter-spacing: -.035em; text-overflow: ellipsis; white-space: nowrap; font-variant-numeric: tabular-nums; }
 .kpi.system-total { background: var(--system-bg); border-color: #c7e1dc; box-shadow: 0 12px 28px rgba(12, 117, 109, .09); }
-.kpi.document-total { background: var(--document-bg); border-color: #ead8b7; box-shadow: 0 12px 28px rgba(126, 80, 16, .08); }
+.kpi.document-total { background: var(--document-bg); border-color: #d2dee3; box-shadow: 0 12px 28px rgba(56, 82, 94, .08); }
 .kpi.system-total strong { color: var(--teal-dark); }
-.kpi.document-total strong { color: #81500d; }
+.kpi.document-total strong { color: #405966; }
 .kpi.accent { color: #fff; background: var(--teal-deep); border-color: var(--teal-deep); }
 .kpi.accent span { color: #c5ddda; }
 
@@ -602,10 +602,19 @@ table {
   width: 100%;
   min-width: 900px;
   border-collapse: collapse;
+  table-layout: fixed;
   font-size: 14px;
   white-space: nowrap;
   font-variant-numeric: tabular-nums;
 }
+
+th:nth-child(1), td:nth-child(1) { width: 18%; }
+th:nth-child(2), td:nth-child(2) { width: 15%; }
+th:nth-child(3), td:nth-child(3) { width: 14%; }
+th:nth-child(4), td:nth-child(4) { width: 16%; }
+th:nth-child(5), td:nth-child(5) { width: 16%; }
+th:nth-child(6), td:nth-child(6) { width: 13%; }
+th:nth-child(7), td:nth-child(7) { width: 8%; }
 
 th {
   position: sticky;
@@ -636,38 +645,38 @@ th.compare-system {
   padding-right: 22px;
   color: var(--teal-dark);
   background: var(--system-bg-strong);
-  border-right: 2px solid var(--comparison-axis);
-  box-shadow: inset -14px 0 18px -17px rgba(7, 91, 85, .5);
+  border-right: 1px solid var(--comparison-axis);
+  box-shadow: inset 9px 0 13px -14px rgba(7, 91, 85, .24);
   text-align: right !important;
 }
 
 th.compare-document {
   padding-left: 22px;
-  color: #76470a;
+  color: #405966;
   background: var(--document-bg-strong);
-  box-shadow: inset 14px 0 18px -17px rgba(118, 71, 10, .42);
+  box-shadow: inset -9px 0 13px -14px rgba(56, 82, 94, .22);
   text-align: left !important;
 }
 
 td.compare-system {
   padding-right: 22px;
   background: var(--system-bg);
-  border-right: 2px solid var(--comparison-axis);
-  box-shadow: inset -14px 0 18px -18px rgba(7, 91, 85, .38);
+  border-right: 1px solid var(--comparison-axis);
+  box-shadow: inset 9px 0 13px -15px rgba(7, 91, 85, .18);
   text-align: right !important;
 }
 
 td.compare-document {
   padding-left: 22px;
   background: var(--document-bg);
-  box-shadow: inset 14px 0 18px -18px rgba(118, 71, 10, .3);
+  box-shadow: inset -9px 0 13px -15px rgba(56, 82, 94, .17);
   text-align: left !important;
 }
 
 tbody tr:nth-child(even) td.compare-system { background: #e9f5f2; }
-tbody tr:nth-child(even) td.compare-document { background: #fdf4e5; }
+tbody tr:nth-child(even) td.compare-document { background: #eef2f5; }
 tbody tr:hover td.compare-system { background: #deefec; }
-tbody tr:hover td.compare-document { background: #f8ead2; }
+tbody tr:hover td.compare-document { background: #e6edf1; }
 
 .code-button {
   padding: 5px 8px;
@@ -693,7 +702,7 @@ tbody tr:hover td.compare-document { background: #f8ead2; }
 .status.ok { color: #176047; background: #dcf1e7; }
 .selected-row td { background: #eaf6f4 !important; }
 .selected-row td.compare-system { background: #d9eeea !important; }
-.selected-row td.compare-document { background: #f6e7cc !important; }
+.selected-row td.compare-document { background: #dde7ec !important; }
 
 .count { color: var(--muted); font-size: 13px; }
 .comparison { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }
